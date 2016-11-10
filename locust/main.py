@@ -63,7 +63,7 @@ def parse_options():
     parser.add_option(
         '--consumer-host',
         dest="consumer_host",
-        action='store_true',
+        action='store',
         type="str",
         default='http://127.0.0.1',
         help="Address of consumer server"
