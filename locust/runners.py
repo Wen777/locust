@@ -6,14 +6,19 @@ import random
 import logging
 import requests
 import json
-from time import time
+from time import time, mktime
 from hashlib import md5
+from datetime import datetime
 
 import gevent
 from gevent import GreenletExit
 from gevent.pool import Group
 import six
 from six.moves import xrange
+
+from locust.stats import median_from_dict
+from collections import defaultdict
+from itertools import chain
 
 from . import events
 from .stats import global_stats
@@ -217,33 +222,56 @@ class LocalLocustConsumerRunner(LocustRunner):
             self.log_exception("local", str(exception), formatted_tb)
         events.locust_error += on_locust_error
 
-        # Init a request client
+        self.notify()
 
     # Notify Consumer server that load testing starts
     def notify(self):
         payload = {
-            'time': date,
-            'mode': 'single',
+            'startedAt': int(mktime(datetime.now().timetuple())),
+            'hostname': socket.gethostname(),
             'targetHost': self.host,
-            'requests': self.num_requests,
-            'clients': self.num_clients
+            'tags': {
+                'mode': 'single',
+                'hostname': self.host,
+            },
+            'measurement': {
+                'fields': {
+                    'clients': self.num_clients,
+                    'hatchRate': self.hatch_rate,
+                    'requests': self.num_requests
+                }
+            },
+            'state': self.state
         }
         r = requests.post(url=self.consumer_host + '/apiv0.1/events/register', json=payload)
         ## based on the result of previous request, set the value of self.uuid
         if r.status_code == 200:
-            res = json.loads(r.json())
-            self.uuid = res['uuid']
+            res = r.json()
+            self.uuid = res['data']['uuid']
 
     # Commit the result of load testing
     def commit(self):
         if not self.uuid:
             return 'Haven\'t initialized.', True
+
         payload = {
-            'time': date,
-            'mode': 'single',
+            'startedAt': int(mktime(datetime.now().timetuple())),
+            'hostname': socket.gethostname(),
             'targetHost': self.host,
-            'requests': self.num_requests,
-            'clients': self.num_clients
+            'user_count': self.user_count,
+            'tags': {
+                'mode': 'single',
+                'hostname': self.host,
+            },
+            'measurement': {
+                'fields': {
+                    'clients': self.num_clients,
+                    'hatchRate': self.hatch_rate,
+                    'requests': self.num_requests
+                }
+            },
+            'state': self.state,
+            'statistics': self.request_stats_dict()
         }
         r = requests.post(url=self.consumer_host + '/apiv0.1/events/commit', json=payload)
         return r.text, r.status_code != 200
@@ -251,6 +279,49 @@ class LocalLocustConsumerRunner(LocustRunner):
     def start_hatching(self, locust_count=None, hatch_rate=None, wait=False):
         self.hatching_greenlet = gevent.spawn(lambda: super(LocalLocustConsumerRunner, self).start_hatching(locust_count, hatch_rate, wait=wait))
         self.greenlet = self.hatching_greenlet
+
+    def _sort_stats(self, stats):
+        return [stats[key] for key in sorted(six.iterkeys(stats))]
+
+    def request_stats_dict(self):
+        stats = []
+        for s in chain(self._sort_stats(self.request_stats), [self.stats.aggregated_stats("Total")]):
+            stats.append({
+                "method": s.method,
+                "name": s.name,
+                "num_requests": s.num_requests,
+                "num_failures": s.num_failures,
+                "avg_response_time": s.avg_response_time,
+                "min_response_time": s.min_response_time or 0,
+                "max_response_time": s.max_response_time,
+                "current_rps": s.current_rps,
+                "median_response_time": s.median_response_time,
+                "avg_content_length": s.avg_content_length,
+            })
+
+        report = {"stats":stats, "errors":[e.to_dict() for e in six.itervalues(self.errors)]}
+        if stats:
+            report["total_rps"] = stats[len(stats)-1]["current_rps"]
+            report["fail_ratio"] = self.stats.aggregated_stats("Total").fail_ratio
+
+            # since generating a total response times dict with all response times from all
+            # urls is slow, we make a new total response time dict which will consist of one
+            # entry per url with the median response time as key and the number of requests as
+            # value
+            response_times = defaultdict(int) # used for calculating total median
+            for i in xrange(len(stats)-1):
+                response_times[stats[i]["median_response_time"]] += stats[i]["num_requests"]
+
+            # calculate total median
+            stats[len(stats)-1]["median_response_time"] = median_from_dict(stats[len(stats)-1]["num_requests"], response_times)
+
+        is_distributed = isinstance(self, MasterLocustRunner)
+        if is_distributed:
+            report["slave_count"] = self.slave_count
+
+        report["state"] = self.state
+        report["user_count"] = self.user_count
+        return report
 
 class DistributedLocustRunner(LocustRunner):
     def __init__(self, locust_classes, options):
