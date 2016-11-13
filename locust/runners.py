@@ -265,13 +265,11 @@ class LocalLocustConsumerRunner(LocustRunner):
             },
             'measurement': {
                 'fields': {
-                    'clients': self.num_clients,
-                    'hatchRate': self.hatch_rate,
-                    'requests': self.num_requests
+                    'requestStats': self.request_stats_dict()
                 }
             },
-            'state': self.state,
-            'statistics': self.request_stats_dict()
+            'uuid': self.uuid,
+            'state': self.state
         }
         r = requests.post(url=self.consumer_host + '/apiv0.1/events/commit', json=payload)
         return r.text, r.status_code != 200
