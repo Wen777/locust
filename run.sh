@@ -1,36 +1,92 @@
 #!/bin/bash
+#
+# Run locust load test
+#
+#####################################################################
+ARGS="$@"
+HOST="${1}"
+SCRIPT_NAME=`basename "$0"`
+INITIAL_DELAY=1
+TARGET_HOST="$HOST"
+CLIENTS=2
+REQUESTS=10
+LOCUST_CMD="/usr/local/bin/locust"
+OPTS="http://"
+
 
 do_check() {
+
   # check hostname is not empty
   if [ "${TARGET_HOST}x" == "x" ]; then
-    echo "TARGET_HOST is not set; use '-e TARGET_HOST=host:port'"
+    echo "TARGET_HOST is not set; use '-h hostname:port'"
     exit 0
   fi
 
-  if [ "${LOCUST_FILE}x" == "x" ]; then
-  	 mv examples/basic.py locustfile.py
-  	echo "Default Locust file: locustfile.py from  examples/basic.py"
+  # check locust file is present
+  if [ -n "${LOCUST_FILE:+1}" ]; then
+  	echo "Locust file: $LOCUST_FILE"
   else
-    curl -O $LOCUST_FILE -o "locustfile.py"
-    echo "Locust file: locustfile.py from\n$LOCUST_FILE"
+  	LOCUST_FILE="locustfile.py" 
+  	echo "Default Locust file: $LOCUST_FILE" 
   fi
 }
 
-LOCUST_CMD="/usr/local/bin/locust"
-LOCUST_OPTS="-f locustfile.py --host=$TARGET_URL"
-LOCUST_MODE=${LOCUST_MODE:-standalone}
+do_exec() {
+  sleep $INITIAL_DELAY
+  echo "Will run $LOCUST_FILE against $TARGET_HOST. Spawning $CLIENTS clients and $REQUESTS total requests."
+  $LOCUST_CMD --host=http://$TARGET_HOST -f $LOCUST_FILE --clients=$CLIENTS --hatch-rate=1 --num-request=$REQUESTS --no-web $OPTS 
+  echo "done"
+}
 
-if [ "$LOCUST_MODE" = "master" ]; then
-  LOCUST_OPTS="$LOCUST_OPTS --master"
-elif [ "$LOCUST_MODE" = "slave" ]; then
-  LOCUST_OPTS="$LOCUST_OPTS --slave --master-host=$MASTER_HOST"
-elif [ "$LOCUST_MODE" = "consumer-single" ]; then
-  LOCUST_OPTS="$LOCUST_OPTS --consumer --consumer-host=$CONSUMER_HOST --clients=$CLIENTS --hatch-rate=1 --num-request=$REQUESTS --no-web --only-summary"
-fi
+do_usage() {
+    cat >&2 <<EOF
+Usage:
+  ${SCRIPT_NAME} [ http://hostname/ ] OPTIONS
+
+Options:
+  -d  Delay before starting
+  -h  Target host url, e.g. http://localhost/
+  -c  Number of clients (default 2)
+  -r  Number of requests (default 10)
+  -m The address of consumer server
+
+Description:
+  Runs a Locust load simulation against specified host.
+
+EOF
+  exit 1
+}
+
+
+
+while getopts ":d:h:c:r:m:" o; do
+  case "${o}" in
+    d)
+        INITIAL_DELAY=${OPTARG}
+        #echo $INITIAL_DELAY
+        ;;
+    h)
+        TARGET_HOST=${OPTARG}
+        echo $TARGET_HOST
+        ;;
+    c)
+        CLIENTS=${OPTARG:-2}
+        #echo $CLIENTS
+        ;;
+    r)
+        REQUESTS=${OPTARG:-10}
+        #echo $REQUESTS
+        ;;
+    m)
+        OPTS="--consumer --consumer-host=http://${OPTARG}"
+        echo $OPTS
+        ;;
+    *)
+        do_usage
+        ;;
+  esac
+done
 
 do_check
+do_exec
 
-echo "=> Starting locust"
-echo "$LOCUST_CMD $LOCUST_OPTS"
-$LOCUST_CMD $LOCUST_OPTS
-echo "done"

@@ -4,7 +4,7 @@ Customized for Hyperpilot
 
 ## Quick start
 
-docker run -e LOCUST_MODE=consumer-single -e CONSUMER_HOST=http://hostname:port -e TARGET_HOST=hostname:port -e CLIENTS=3 -e REQUESTS=100 wen777/load-testing
+docker run wen777/load-testing -h  hostname:port  -c 10 -r 100 -m metrics-host:port
 
 ## Build
 
